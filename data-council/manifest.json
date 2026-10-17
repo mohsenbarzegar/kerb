@@ -1,7 +1,7 @@
 {
  "source": "Council data: Camden, Westminster, Brent, Ealing parking",
  "updated": "2026-10-16",
- "bay_count": 18660,
+ "bay_count": 18746,
  "cell": {
   "lat": 0.025,
   "lon": 0.04
@@ -38,6 +38,7 @@
   "2062_-7.json",
   "2062_-8.json",
   "2062_-9.json",
-  "2063_-7.json"
+  "2063_-7.json",
+  "2063_-8.json"
  ]
 }
