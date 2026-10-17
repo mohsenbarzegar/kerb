@@ -21,6 +21,51 @@ function humanize(label) {
   if (!label) return "no parking";
   return HUMAN_LABELS[label] || label.replace(/_/g, " ");
 }
+
+const PAY_LABELS = {
+  coins: "coins", cash: "cash", notes: "banknotes", cards: "cards",
+  credit_cards: "credit cards", debit_cards: "debit cards",
+  contactless: "contactless", app: "app", mobile_app: "mobile app",
+  mobile_phone: "mobile phone", telephone: "phone",
+  ringgo: "RingGo app", paybyphone: "PayByPhone app",
+  justpark: "JustPark app", parkonomy: "Parkonomy",
+  electronic_purses: "electronic purse", cheque: "cheque",
+  tokens: "tokens", vouchers: "vouchers",
+};
+const PAY_ORDER = ["coins", "cash", "notes", "cards", "credit_cards", "debit_cards",
+  "contactless", "ringgo", "paybyphone", "justpark", "app",
+  "mobile_app", "mobile_phone", "telephone", "electronic_purses",
+  "cheque", "tokens", "vouchers"];
+
+function paymentMethods(tags) {
+  const found = Object.keys(tags)
+    .filter(k => k.startsWith("payment:") && tags[k] === "yes")
+    .map(k => k.slice("payment:".length));
+  found.sort((a, b) => {
+    const ia = PAY_ORDER.includes(a) ? PAY_ORDER.indexOf(a) : 99;
+    const ib = PAY_ORDER.includes(b) ? PAY_ORDER.indexOf(b) : 99;
+    return ia - ib || (a < b ? -1 : a > b ? 1 : 0);
+  });
+  return found.map(m => PAY_LABELS[m] || m.replace(/_/g, " "));
+}
+
+function detailsFor(f) {
+  const d = {};
+  const tags = f.tags, extra = f.extra || {};
+  const hours = extra.opening_hours || tags.opening_hours;
+  if (hours) d.hours = hours;
+  const price = extra.charge || tags.charge;
+  if (price) d.price = price;
+  const cond = extra["fee:conditional"] || tags["fee:conditional"];
+  if (cond) d.price_note = cond;
+  const pays = paymentMethods(tags);
+  if (pays.length) d.pay_by = pays;
+  const maxstay = extra.maxstay || tags.maxstay;
+  if (maxstay) d.max_stay = maxstay;
+  const website = extra.website || tags.website || tags["contact:website"];
+  if (website) d.website = website;
+  return d;
+}
 function sidePhrase(side) { return side === "both" ? "both sides" : `the ${side} side`; }
 
 function get(tags, ...keys) {
@@ -99,9 +144,12 @@ function parseFeature(el) {
 
   if (tags.amenity === "parking") {
     const extra = {};
-    for (const k of ["fee", "capacity", "opening_hours", "access", "surface", "operator", "park_ride"]) {
+    for (const k of ["fee", "capacity", "opening_hours", "access", "surface", "operator",
+                     "park_ride", "charge", "fee:conditional", "maxstay"]) {
       if (k in tags) extra[k] = tags[k];
     }
+    const website = tags.website || tags["contact:website"];
+    if (website) extra.website = website;
     return { osm_type: etype, osm_id: eid, kind: "car_park", name: tags.name || null,
              lat, lon, sides: [], extra, tags };
   }
@@ -154,9 +202,15 @@ function verdictFor(feature, at) {
     const feeTxt = fee === "no" ? "free" : fee === "yes" ? "paid" : "fee unknown";
     const access = feature.extra.access;
     const accessTxt = access && !["yes", "public"].includes(access) ? `; access: ${access}` : "";
-    return { verdict: "car_park",
-             summary: `Off-street car park (${feeTxt}${accessTxt}).`,
-             confidence: fee ? "medium" : "low" };
+    let summary = `Off-street car park (${feeTxt}${accessTxt}).`;
+    const det = detailsFor(feature);
+    if (fee === "yes") {
+      summary += det.price ? ` Price: ${det.price}.` : " Price not published in open data.";
+    }
+    if (det.hours) summary += ` Hours: ${det.hours}.`;
+    if (det.pay_by) summary += ` Pay by: ${det.pay_by.join(", ")}.`;
+    if (det.max_stay) summary += ` Max stay: ${det.max_stay}.`;
+    return { verdict: "car_park", summary, confidence: fee ? "medium" : "low" };
   }
   const parts = [];
   let anyPerm = false, anyProhib = false;
@@ -196,7 +250,10 @@ function toDict(f) {
     for (const k of ["fee", "capacity", "opening_hours", "access", "surface", "operator"]) {
       if (k in f.extra) d[k] = f.extra[k];
     }
-  } else {
+  }
+  const details = detailsFor(f);
+  if (Object.keys(details).length) d.details = details;
+  if (f.kind !== "car_park") {
     d.sides = f.sides.map(s => {
       const row = { side: s.side,
         parking: s.permitted === true ? "permitted" : s.permitted === false ? "prohibited" : "unknown" };

@@ -1,0 +1,20 @@
+{
+ "source": "Camden Council open data (parking bays)",
+ "updated": "2026-10-16",
+ "bay_count": 8850,
+ "cell": {
+  "lat": 0.025,
+  "lon": 0.04
+ },
+ "tiles": [
+  "2060_-3.json",
+  "2060_-4.json",
+  "2061_-3.json",
+  "2061_-4.json",
+  "2061_-5.json",
+  "2061_-6.json",
+  "2062_-4.json",
+  "2062_-5.json",
+  "2062_-6.json"
+ ]
+}

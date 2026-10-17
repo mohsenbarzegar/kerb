@@ -57,14 +57,17 @@
 <footer>Open data is incomplete — coverage varies street by street and tariffs
 often aren't published openly. <strong>Always check the sign on the street; it
 is the legal truth.</strong> Data: © OpenStreetMap contributors (ODbL), via the
-Geofabrik Greater London extract. D-TRO (DfT) data joins the same engine once
-our data-consumer account is approved.</footer>
+Geofabrik Greater London extract. Camden bay data (tariffs, times, RingGo
+codes): © Camden Council open data. D-TRO (DfT) data joins the same engine
+once our data-consumer account is approved.</footer>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="engine.js"></script>
 <script>
 const CELL = { lat: 0.025, lon: 0.04 };
 let manifest = null, map = null, markers = [];
 const tileCache = {};
+let councilManifest = null;
+const councilCache = {};
 
 async function getManifest() {
   if (!manifest) manifest = await (await fetch('data/manifest.json')).json();
@@ -90,6 +93,32 @@ async function loadTiles(lat, lon, radiusM) {
     }
     out.push(...tileCache[name]);
   }
+  return out;
+}
+async function loadCouncil(lat, lon, radiusM) {
+  try {
+    if (!councilManifest)
+      councilManifest = await (await fetch('data-council/manifest.json')).json();
+  } catch (e) { return []; }
+  const dLat = radiusM / 111320, dLon = radiusM / (111320 * Math.cos(lat * Math.PI / 180));
+  const names = new Set();
+  for (let la = lat - dLat; la <= lat + dLat; la += CELL.lat / 2)
+    for (let lo = lon - dLon; lo <= lon + dLon; lo += CELL.lon / 2)
+      names.add(tileName(la, lo));
+  const have = new Set(councilManifest.tiles);
+  const out = [];
+  for (const name of names) {
+    if (!have.has(name)) continue;
+    if (!councilCache[name]) {
+      try { councilCache[name] = (await (await fetch('data-council/' + name)).json()).bays; }
+      catch (e) { councilCache[name] = []; }
+    }
+    for (const b of councilCache[name]) {
+      b.distance_m = KerbEngine.haversineM(lat, lon, b.lat, b.lon);
+      if (b.distance_m <= radiusM) out.push(b);
+    }
+  }
+  out.sort((a, b) => a.distance_m - b.distance_m);
   return out;
 }
 function ensureMap(lat, lon) {
@@ -161,7 +190,31 @@ document.getElementById('f').addEventListener('submit', async (e) => {
       markers.push(L.marker([f.lat, f.lon]).addTo(map)
         .bindPopup((row.name || row.kind) + ' — ' + v.verdict));
     });
-    if (!feats.length)
+    const bays = await loadCouncil(lat, lon, radius);
+    if (bays.length) {
+      const head = document.createElement('div');
+      head.innerHTML = '<strong>Camden Council — official bay data</strong> (' +
+        bays.length + ' nearby, incl. tariffs)';
+      head.style.margin = '14px 0 4px';
+      box.appendChild(head);
+      bays.slice(0, 8).forEach(b => {
+        const div = document.createElement('div');
+        div.className = 'card';
+        div.innerHTML = '<span class="chip car_park">Camden</span> <strong>' +
+          (b.road || 'Parking bay') + '</strong>' +
+          '<div class="meta">' + b.distance_m + ' m away · ' + (b.restriction || '') +
+          (b.cpz ? ' · CPZ ' + b.cpz : '') + '</div>' +
+          (b.times ? '<div>🕗 ' + b.times + (b.max_stay ? ' · max stay ' + b.max_stay : '') + '</div>' : '') +
+          (b.tariff ? '<div>💷 ' + b.tariff + '</div>' : '') +
+          (b.ringgo_code ? '<div>📱 Pay by RingGo (Camden\'s cashless provider) — code ' +
+            b.ringgo_code + ', app / myringgo.co.uk / 020 3003 2532</div>' : '') +
+          (b.machine ? '<div class="meta">Nearest machine: ' + b.machine + '</div>' : '');
+        box.appendChild(div);
+        markers.push(L.marker([b.lat, b.lon]).addTo(map)
+          .bindPopup((b.road || 'Bay') + ' — ' + (b.restriction || '')));
+      });
+    }
+    if (!feats.length && !bays.length)
       box.innerHTML = '<div class="card">No parking is mapped in open data within that radius. That means "not mapped", not "no parking exists".</div>';
   } catch (err) {
     status.textContent = 'Search failed: ' + err;
