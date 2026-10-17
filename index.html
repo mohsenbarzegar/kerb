@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kerb — where can I park in London?</title>
+<meta name="description" content="Free, instant London parking answers from open data. The demo front-end for the Kerb MCP server.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0 auto;
+         max-width: 760px; padding: 16px; line-height: 1.45; }
+  h1 { font-size: 1.5rem; margin: 8px 0 2px; }
+  .sub { opacity: .75; margin: 0 0 14px; }
+  form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  input[type=text] { flex: 1 1 220px; padding: 10px; font-size: 1rem;
+                     border: 1px solid #8886; border-radius: 8px; }
+  select, button { padding: 10px; font-size: 1rem; border-radius: 8px;
+                   border: 1px solid #8886; }
+  button { background: #1663ff; color: #fff; border: none; cursor: pointer; }
+  #map { height: 300px; border-radius: 10px; margin: 10px 0; background: #8882; }
+  .card { border: 1px solid #8884; border-radius: 10px; padding: 10px 12px;
+          margin: 8px 0; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 999px;
+          font-size: .8rem; font-weight: 600; color: #fff; }
+  .likely_ok { background: #1a9e4b; } .restricted { background: #d43a2f; }
+  .mixed_by_side { background: #e08a00; } .unknown { background: #777; }
+  .car_park { background: #1663ff; }
+  .meta { opacity: .75; font-size: .9rem; }
+  .warn { color: #d43a2f; font-weight: 600; }
+  footer { margin-top: 18px; font-size: .85rem; opacity: .75; }
+  #status { font-size: .9rem; margin: 6px 0; }
+</style>
+</head>
+<body>
+<h1>🅿️ Kerb</h1>
+<p class="sub">Free, <strong>instant</strong> London parking answers from open data — the demo front-end for the Kerb MCP server.</p>
+<form id="f">
+  <input type="text" id="place" placeholder="e.g. Baker Street, London" required>
+  <select id="radius">
+    <option value="300">300 m</option>
+    <option value="500" selected>500 m</option>
+    <option value="800">800 m</option>
+    <option value="1000">1 km</option>
+  </select>
+  <select id="duration">
+    <option value="">Any duration</option>
+    <option value="60">1 hour</option>
+    <option value="120">2 hours</option>
+    <option value="240">4 hours</option>
+  </select>
+  <button type="submit">Find parking</button>
+</form>
+<div id="status">Type a London place to search — answers come from a local snapshot of OpenStreetMap, so they're instant.</div>
+<div id="map"></div>
+<div id="results"></div>
+<footer>Open data is incomplete — coverage varies street by street and tariffs
+often aren't published openly. <strong>Always check the sign on the street; it
+is the legal truth.</strong> Data: © OpenStreetMap contributors (ODbL), via the
+Geofabrik Greater London extract. D-TRO (DfT) data joins the same engine once
+our data-consumer account is approved.</footer>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="engine.js"></script>
+<script>
+const CELL = { lat: 0.025, lon: 0.04 };
+let manifest = null, map = null, markers = [];
+const tileCache = {};
+
+async function getManifest() {
+  if (!manifest) manifest = await (await fetch('data/manifest.json')).json();
+  return manifest;
+}
+function tileName(lat, lon) {
+  return Math.floor(lat / CELL.lat) + '_' + Math.floor(lon / CELL.lon) + '.json';
+}
+async function loadTiles(lat, lon, radiusM) {
+  const man = await getManifest();
+  const dLat = radiusM / 111320, dLon = radiusM / (111320 * Math.cos(lat * Math.PI / 180));
+  const names = new Set();
+  for (let la = lat - dLat; la <= lat + dLat; la += CELL.lat / 2)
+    for (let lo = lon - dLon; lo <= lon + dLon; lo += CELL.lon / 2)
+      names.add(tileName(la, lo));
+  const have = new Set(man.tiles);
+  const out = [];
+  for (const name of names) {
+    if (!have.has(name)) continue;
+    if (!tileCache[name]) {
+      try { tileCache[name] = (await (await fetch('data/' + name)).json()).features; }
+      catch (e) { tileCache[name] = []; }
+    }
+    out.push(...tileCache[name]);
+  }
+  return out;
+}
+function ensureMap(lat, lon) {
+  if (!map) {
+    map = L.map('map').setView([lat, lon], 15);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { attribution: '© OpenStreetMap contributors' }).addTo(map);
+  } else { map.setView([lat, lon], 15); }
+  markers.forEach(m => m.remove()); markers = [];
+}
+function durationWarning(f, durationMin) {
+  if (!durationMin) return null;
+  for (const s of f.sides || []) {
+    if (!s.maxstay) continue;
+    const m = s.maxstay.toLowerCase();
+    const hrs = /(\d+(?:\.\d+)?)\s*hour/.exec(m), mins = /(\d+)\s*min/.exec(m);
+    let limit = null;
+    if (hrs) limit = parseFloat(hrs[1]) * 60; else if (mins) limit = parseInt(mins[1], 10);
+    if (limit !== null && durationMin > limit)
+      return 'Requested stay (' + durationMin + ' min) exceeds the mapped max stay (' +
+             s.maxstay + ') on the ' + s.side + ' side.';
+  }
+  return null;
+}
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const place = document.getElementById('place').value.trim();
+  const radius = parseInt(document.getElementById('radius').value, 10);
+  const duration = document.getElementById('duration').value;
+  const status = document.getElementById('status');
+  const box = document.getElementById('results');
+  box.innerHTML = '';
+  status.textContent = 'Searching…';
+  try {
+    const geo = await (await fetch('https://nominatim.openstreetmap.org/search?' +
+      new URLSearchParams({ q: place, format: 'jsonv2', limit: 1, countrycodes: 'gb' }))).json();
+    if (!geo.length) { status.textContent = 'Place not found — try adding "London".'; return; }
+    const lat = parseFloat(geo[0].lat), lon = parseFloat(geo[0].lon);
+    const elements = await loadTiles(lat, lon, radius);
+    const feats = [];
+    for (const el of elements) {
+      const f = KerbEngine.parseFeature(el);
+      if (!f) continue;
+      f.distance_m = KerbEngine.haversineM(lat, lon, f.lat, f.lon);
+      if (f.distance_m <= radius) feats.push(f);
+    }
+    feats.sort((a, b) => a.distance_m - b.distance_m);
+    const man = await getManifest();
+    status.textContent = feats.length + ' result(s) near ' + geo[0].display_name.split(',').slice(0, 2).join(',') +
+      ' · OpenStreetMap London snapshot (' + man.built_at.slice(0, 10) + ') · D-TRO: pending DfT approval';
+    ensureMap(lat, lon);
+    markers.push(L.marker([lat, lon]).addTo(map));
+    feats.slice(0, 20).forEach(f => {
+      const v = KerbEngine.verdictFor(f, new Date());
+      const row = KerbEngine.toDict(f);
+      const warn = durationWarning(f, duration ? parseInt(duration, 10) : null);
+      const div = document.createElement('div');
+      div.className = 'card';
+      const sides = (row.sides || []).map(s =>
+        s.side + ': ' + s.parking + (s.maxstay ? ' (max ' + s.maxstay + ')' : '') +
+        (s.fee ? ' · ' + s.fee : '')).join(' · ');
+      div.innerHTML = '<span class="chip ' + v.verdict + '">' + v.verdict.replace(/_/g, ' ') +
+        '</span> <strong>' + (row.name || row.kind.replace(/_/g, ' ')) + '</strong>' +
+        '<div class="meta">' + row.distance_m + ' m away' + (row.fee ? ' · fee: ' + row.fee : '') + '</div>' +
+        '<div>' + v.summary + '</div>' +
+        (sides ? '<div class="meta">' + sides + '</div>' : '') +
+        (warn ? '<div class="warn">' + warn + '</div>' : '');
+      box.appendChild(div);
+      markers.push(L.marker([f.lat, f.lon]).addTo(map)
+        .bindPopup((row.name || row.kind) + ' — ' + v.verdict));
+    });
+    if (!feats.length)
+      box.innerHTML = '<div class="card">No parking is mapped in open data within that radius. That means "not mapped", not "no parking exists".</div>';
+  } catch (err) {
+    status.textContent = 'Search failed: ' + err;
+  }
+});
+</script>
+</body>
+</html>
