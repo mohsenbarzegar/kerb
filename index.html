@@ -57,9 +57,9 @@
 <footer>Open data is incomplete — coverage varies street by street and tariffs
 often aren't published openly. <strong>Always check the sign on the street; it
 is the legal truth.</strong> Data: © OpenStreetMap contributors (ODbL), via the
-Geofabrik Greater London extract. Camden bay data (tariffs, times, RingGo
-codes): © Camden Council open data. D-TRO (DfT) data joins the same engine
-once our data-consumer account is approved.</footer>
+Geofabrik Greater London extract. Bay data with tariffs, times and how to
+pay: © Camden Council and Westminster City Council open data. D-TRO (DfT)
+data joins the same engine once our data-consumer account is approved.</footer>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="engine.js"></script>
 <script>
@@ -193,21 +193,20 @@ document.getElementById('f').addEventListener('submit', async (e) => {
     const bays = await loadCouncil(lat, lon, radius);
     if (bays.length) {
       const head = document.createElement('div');
-      head.innerHTML = '<strong>Camden Council — official bay data</strong> (' +
-        bays.length + ' nearby, incl. tariffs)';
+      head.innerHTML = '<strong>Council data — official bays</strong> (' +
+        bays.length + ' nearby, incl. tariffs where published)';
       head.style.margin = '14px 0 4px';
       box.appendChild(head);
       bays.slice(0, 8).forEach(b => {
         const div = document.createElement('div');
         div.className = 'card';
-        div.innerHTML = '<span class="chip car_park">Camden</span> <strong>' +
+        div.innerHTML = '<span class="chip car_park">' + (b.council || 'Council') + '</span> <strong>' +
           (b.road || 'Parking bay') + '</strong>' +
           '<div class="meta">' + b.distance_m + ' m away · ' + (b.restriction || '') +
           (b.cpz ? ' · CPZ ' + b.cpz : '') + '</div>' +
           (b.times ? '<div>🕗 ' + b.times + (b.max_stay ? ' · max stay ' + b.max_stay : '') + '</div>' : '') +
           (b.tariff ? '<div>💷 ' + b.tariff + '</div>' : '') +
-          (b.ringgo_code ? '<div>📱 Pay by RingGo (Camden\'s cashless provider) — code ' +
-            b.ringgo_code + ', app / myringgo.co.uk / 020 3003 2532</div>' : '') +
+          (b.pay ? '<div>📱 ' + b.pay + '</div>' : '') +
           (b.machine ? '<div class="meta">Nearest machine: ' + b.machine + '</div>' : '');
         box.appendChild(div);
         markers.push(L.marker([b.lat, b.lon]).addTo(map)
