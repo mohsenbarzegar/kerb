@@ -98,6 +98,30 @@ async function loadTiles(lat, lon, radiusM) {
   }
   return out;
 }
+function normName(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+}
+async function findNamedBays(place) {
+  // Exact street-name match against the council data itself. A bare
+  // street name geocodes unpredictably (Nominatim's top hit for
+  // "coronation road" is the one in Hayes, not Park Royal).
+  const q = normName(place);
+  if (q.length < 4) return [];
+  try {
+    if (!councilManifest)
+      councilManifest = await (await fetch('data-council/manifest.json')).json();
+  } catch (e) { return []; }
+  const out = [];
+  for (const name of councilManifest.tiles) {
+    if (!councilCache[name]) {
+      try { councilCache[name] = (await (await fetch('data-council/' + name)).json()).bays; }
+      catch (e) { councilCache[name] = []; }
+    }
+    for (const b of councilCache[name])
+      if (normName((b.road || '').split(',')[0]) === q) out.push(b);
+  }
+  return out;
+}
 async function loadCouncil(lat, lon, radiusM) {
   let widened = false;
   let out = await loadCouncilWithin(lat, lon, radiusM);
@@ -168,10 +192,24 @@ document.getElementById('f').addEventListener('submit', async (e) => {
   box.innerHTML = '';
   status.textContent = 'Searching…';
   try {
-    const geo = await (await fetch('https://nominatim.openstreetmap.org/search?' +
-      new URLSearchParams({ q: place, format: 'jsonv2', limit: 1, countrycodes: 'gb' }))).json();
-    if (!geo.length) { status.textContent = 'Place not found — try adding "London".'; return; }
-    const lat = parseFloat(geo[0].lat), lon = parseFloat(geo[0].lon);
+    let lat, lon, centreLabel;
+    const named = await findNamedBays(place);
+    if (named.length) {
+      const cla = named.reduce((s, b) => s + b.lat, 0) / named.length;
+      const clo = named.reduce((s, b) => s + b.lon, 0) / named.length;
+      const spread = Math.max(...named.map(b => KerbEngine.haversineM(cla, clo, b.lat, b.lon)));
+      if (spread <= 3000) {
+        lat = cla; lon = clo;
+        centreLabel = named[0].road + ' (exact match in council data)';
+      }
+    }
+    if (lat === undefined) {
+      const geo = await (await fetch('https://nominatim.openstreetmap.org/search?' +
+        new URLSearchParams({ q: place, format: 'jsonv2', limit: 1, countrycodes: 'gb' }))).json();
+      if (!geo.length) { status.textContent = 'Place not found — try adding "London".'; return; }
+      lat = parseFloat(geo[0].lat); lon = parseFloat(geo[0].lon);
+      centreLabel = geo[0].display_name.split(',').slice(0, 2).join(',');
+    }
     const elements = await loadTiles(lat, lon, radius);
     const feats = [];
     for (const el of elements) {
@@ -182,7 +220,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
     }
     feats.sort((a, b) => a.distance_m - b.distance_m);
     const man = await getManifest();
-    status.textContent = feats.length + ' result(s) near ' + geo[0].display_name.split(',').slice(0, 2).join(',') +
+    status.textContent = feats.length + ' result(s) near ' + centreLabel +
       ' · OpenStreetMap London snapshot (' + man.built_at.slice(0, 10) + ') · D-TRO: pending DfT approval';
     ensureMap(lat, lon);
     markers.push(L.marker([lat, lon]).addTo(map));
