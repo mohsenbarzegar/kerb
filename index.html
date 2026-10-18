@@ -30,6 +30,9 @@
   .warn { color: #d43a2f; font-weight: 600; }
   footer { margin-top: 18px; font-size: .85rem; opacity: .75; }
   #status { font-size: .9rem; margin: 6px 0; }
+  .leaflet-tooltip.kerb-tip { max-width: min(78vw, 320px); white-space: normal;
+    line-height: 1.35; }
+  .leaflet-popup-content { line-height: 1.35; font-size: .92rem; }
 </style>
 </head>
 <body>
@@ -79,7 +82,7 @@ Yellow-line (waiting restriction) data: © City of London Corporation,
 published as INSPIRE open data; street-level waiting data © London
 Borough of Barnet (open data portal).
 D-TRO (DfT) data joins the same engine once our data-consumer account is
-approved. Demo build v0.40.0.</footer>
+approved. Demo build v0.40.1.</footer>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="engine.js"></script>
 <script>
@@ -266,6 +269,20 @@ function lineTooltip(l) {
     '<br><span class="meta">City of London · Order ' + (l.tmo || '2021/18') +
     ' · Always check the sign — it is the legal truth.</span>';
 }
+// Line detail display: a sticky tooltip follows the pointer on
+// large screens, but on phones it renders half off-screen — so on
+// small screens use a Leaflet popup instead, whose autoPan keeps
+// it fully in view.
+const SMALL_SCREEN = window.matchMedia &&
+  window.matchMedia('(max-width: 640px)').matches;
+function tipBind(layer, html) {
+  if (SMALL_SCREEN)
+    layer.bindPopup(html, { maxWidth: 300, maxHeight: 260,
+                            autoPanPadding: [12, 12] });
+  else
+    layer.bindTooltip(html, { sticky: true, className: 'kerb-tip' });
+  return layer;
+}
 // ---- Barnet street highlights ----
 // Barnet publishes waiting totals per street and side but no line
 // positions, so its streets are drawn as thick translucent
@@ -333,8 +350,8 @@ async function showBarnetStreetOnMap(key, near) {
     if (!searchLayer) searchLayer = L.layerGroup().addTo(map);
     searchLayer.clearLayers();
     for (const path of rec.paths)
-      L.polyline(path, { color: '#f59e0b', weight: 10, opacity: 0.55 })
-        .bindTooltip(barnetTooltip(rec), { sticky: true }).addTo(searchLayer);
+      tipBind(L.polyline(path, { color: '#f59e0b', weight: 10, opacity: 0.55 }),
+        barnetTooltip(rec)).addTo(searchLayer);
     map.fitBounds([[ent.b[0], ent.b[1]], [ent.b[2], ent.b[3]]],
       { padding: [30, 30] });
     return true;
@@ -365,8 +382,8 @@ async function drawLines() {
       if (drawn.has(l.id)) continue;
       drawn.add(l.id);
       for (const path of l.paths)
-        L.polyline(path, LINE_STYLES[l.type] || LINE_STYLES.unstated)
-          .bindTooltip(lineTooltip(l), { sticky: true }).addTo(lineLayer);
+        tipBind(L.polyline(path, LINE_STYLES[l.type] || LINE_STYLES.unstated),
+          lineTooltip(l)).addTo(lineLayer);
     }
   }
   // Barnet street highlights for the same map bounds.
@@ -380,8 +397,8 @@ async function drawLines() {
         if (drawn.has(s.id)) continue;
         drawn.add(s.id);
         for (const path of s.paths)
-          L.polyline(path, bnStyle(s))
-            .bindTooltip(barnetTooltip(s), { sticky: true }).addTo(lineLayer);
+          tipBind(L.polyline(path, bnStyle(s)),
+            barnetTooltip(s)).addTo(lineLayer);
       }
     }
   } catch (e) {}
