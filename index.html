@@ -82,7 +82,7 @@ Yellow-line (waiting restriction) data: © City of London Corporation,
 published as INSPIRE open data; street-level waiting data © London
 Borough of Barnet (open data portal).
 D-TRO (DfT) data joins the same engine once our data-consumer account is
-approved. Demo build v0.40.1.</footer>
+approved. Demo build v0.40.2.</footer>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="engine.js"></script>
 <script>
@@ -247,6 +247,7 @@ function ensureMap(lat, lon) {
 }
 // ---- Yellow-lines overlay (waiting restrictions) ----
 let lineManifest = null, lineLayer = null, lineHooked = false;
+let linePopupOpen = false;
 const lineCache = {};
 const LINE_STYLES = {
   double:   { color: '#f59e0b', weight: 6, opacity: 0.95 },
@@ -359,6 +360,9 @@ async function showBarnetStreetOnMap(key, near) {
 }
 async function drawLines() {
   if (!map) return;
+  // A popup's autoPan fires moveend; redrawing now would clear the
+  // very layer the open popup is attached to and kill it instantly.
+  if (linePopupOpen) return;
   try {
     if (!lineManifest)
       lineManifest = await (await fetch('data-lines/manifest.json')).json();
@@ -411,6 +415,11 @@ document.getElementById('showlines').addEventListener('change', async (e) => {
     if (!lineHooked) {
       lineHooked = true;
       map.on('moveend', () => {
+        if (document.getElementById('showlines').checked) drawLines();
+      });
+      map.on('popupopen', () => { linePopupOpen = true; });
+      map.on('popupclose', () => {
+        linePopupOpen = false;
         if (document.getElementById('showlines').checked) drawLines();
       });
     }
