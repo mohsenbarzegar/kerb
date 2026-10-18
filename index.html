@@ -72,9 +72,10 @@ is the legal truth.</strong> Data: © OpenStreetMap contributors (ODbL), via the
 Geofabrik Greater London extract. Bay and car park data with tariffs,
 times and how to pay: © Camden, Westminster, Brent and Ealing councils.
 Yellow-line (waiting restriction) data: © City of London Corporation,
-published as INSPIRE open data.
+published as INSPIRE open data; street-level waiting data © London
+Borough of Barnet (open data portal).
 D-TRO (DfT) data joins the same engine once our data-consumer account is
-approved. Demo build v0.38.0.</footer>
+approved. Demo build v0.39.0.</footer>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="engine.js"></script>
 <script>
@@ -134,6 +135,20 @@ async function findNamedBays(place) {
   }
   return out;
 }
+let barnetWaiting = null;
+async function findBarnetWaiting(place) {
+  // Street-level waiting restrictions (yellow lines) published by
+  // Barnet without segment geometry: exact street-name match only,
+  // shown as per-side totals — never drawn as lines.
+  let q = normName(place).replace(/ (barnet|london)$/, '');
+  if (q.length < 4) return null;
+  try {
+    if (!barnetWaiting)
+      barnetWaiting = await (await fetch('data-waiting/barnet.json')).json();
+  } catch (e) { return null; }
+  return barnetWaiting.streets[q] || null;
+}
+function segWord(n) { return n === 1 ? 'segment' : 'segments'; }
 async function loadCouncil(lat, lon, radiusM) {
   let widened = false;
   let out = await loadCouncilWithin(lat, lon, radiusM);
@@ -347,7 +362,35 @@ document.getElementById('f').addEventListener('submit', async (e) => {
           .bindPopup((b.road || 'Bay') + ' — ' + (b.restriction || '')));
       });
     }
-    if (!feats.length && !bays.length)
+    const waiting = await findBarnetWaiting(place);
+    if (waiting) {
+      const head = document.createElement('div');
+      head.innerHTML = '<strong>Yellow lines on this street — Barnet Council data</strong>';
+      head.style.margin = '14px 0 4px';
+      box.appendChild(head);
+      const div = document.createElement('div');
+      div.className = 'card';
+      let html = '<strong>' + waiting.name + '</strong>' +
+        '<div class="meta">Barnet publishes waiting restrictions per street and side, with lengths but no exact positions — the totals below are the council\u2019s own. Same-name streets in different parts of Barnet are combined, as in the council\u2019s file. Always check the sign.</div>';
+      for (const s of waiting.sides) {
+        const label = (s.side === 'Both sides' || s.side === 'Side not stated')
+          ? s.side : s.side + ' side';
+        const parts = s.entries.map(e => {
+          const swatch = e.type === 'double'
+            ? '<span style="color:#f59e0b;font-weight:700">━━</span> Double yellow'
+            : '<span style="color:#eab308;font-weight:700">━━</span> Single yellow';
+          const hrs = e.type === 'double' ? 'no waiting at any time'
+            : (e.hours ? 'no waiting ' + e.hours
+                       : 'no waiting — hours not specified in the council\u2019s file');
+          return swatch + ' (' + hrs + '): ' + Math.round(e.metres) +
+            ' m in ' + e.segments + ' ' + segWord(e.segments);
+        });
+        html += '<div>' + label + ' — ' + parts.join(' · ') + '</div>';
+      }
+      div.innerHTML = html;
+      box.appendChild(div);
+    }
+    if (!feats.length && !bays.length && !waiting)
       box.innerHTML = '<div class="card">No parking is mapped in open data within that radius. That means "not mapped", not "no parking exists".</div>';
   } catch (err) {
     status.textContent = 'Search failed: ' + err;
