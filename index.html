@@ -53,7 +53,7 @@
   </select>
   <button type="submit">Find parking</button>
 </form>
-<div id="status">Type a London place to search — answers come from a local snapshot of OpenStreetMap, so they're instant.</div>
+<div id="status">Type a London place to search — answers come from a local snapshot of OpenStreetMap, so they're instant. Yellow lines: tick the overlay under the map for the City of London, or search a Barnet street name (e.g. Squires Lane) for its yellow-line data.</div>
 <div id="map"></div>
 <div id="linectl" style="margin:6px 0;font-size:.92rem">
   <label><input type="checkbox" id="showlines"> Yellow lines overlay
@@ -75,7 +75,7 @@ Yellow-line (waiting restriction) data: © City of London Corporation,
 published as INSPIRE open data; street-level waiting data © London
 Borough of Barnet (open data portal).
 D-TRO (DfT) data joins the same engine once our data-consumer account is
-approved. Demo build v0.39.0.</footer>
+approved. Demo build v0.39.1.</footer>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="engine.js"></script>
 <script>
@@ -139,16 +139,53 @@ let barnetWaiting = null;
 async function findBarnetWaiting(place) {
   // Street-level waiting restrictions (yellow lines) published by
   // Barnet without segment geometry: exact street-name match only,
-  // shown as per-side totals — never drawn as lines.
-  let q = normName(place).replace(/ (barnet|london)$/, '');
+  // shown as per-side totals — never drawn as lines. The borough
+  // name may lead or trail the street name ("Barnet High Street",
+  // "High Street, Barnet"), so try the natural variants.
+  const q = normName(place);
   if (q.length < 4) return null;
+  const cands = new Set([q]);
+  let t = q.replace(/^the /, '');
+  if (t.startsWith('barnet ')) t = t.slice(7);
+  cands.add(t);
+  for (const base of [...cands]) cands.add(base.replace(/ (barnet|london)$/, ''));
   try {
     if (!barnetWaiting)
       barnetWaiting = await (await fetch('data-waiting/barnet.json')).json();
   } catch (e) { return null; }
-  return barnetWaiting.streets[q] || null;
+  for (const key of cands) {
+    if (barnetWaiting.streets[key]) return barnetWaiting.streets[key];
+  }
+  return null;
 }
 function segWord(n) { return n === 1 ? 'segment' : 'segments'; }
+function renderWaitingCard(box, waiting) {
+  const head = document.createElement('div');
+  head.innerHTML = '<strong>Yellow lines on this street — Barnet Council data</strong>';
+  head.style.margin = '14px 0 4px';
+  box.appendChild(head);
+  const div = document.createElement('div');
+  div.className = 'card';
+  let html = '<strong>' + waiting.name + '</strong>' +
+    '<div class="meta">Barnet publishes waiting restrictions per street and side, with lengths but no exact positions — the totals below are the council\u2019s own. Same-name streets in different parts of Barnet are combined, as in the council\u2019s file. Always check the sign.</div>';
+  for (const s of waiting.sides) {
+    const label = (s.side === 'Both sides' || s.side === 'Side not stated')
+      ? s.side : s.side + ' side';
+    const parts = s.entries.map(e => {
+      const swatch = e.type === 'double'
+        ? '<span style="color:#f59e0b;font-weight:700">━━</span> Double yellow'
+        : '<span style="color:#eab308;font-weight:700">━━</span> Single yellow';
+      const hrs = e.type === 'double' ? 'no waiting at any time'
+        : (e.hours ? 'no waiting ' + e.hours
+                   : 'no waiting — hours not specified in the council\u2019s file');
+      return swatch + ' (' + hrs + '): ' + Math.round(e.metres) +
+        ' m in ' + e.segments + ' ' + segWord(e.segments);
+    });
+    html += '<div>' + label + ' — ' + parts.join(' · ') + '</div>';
+  }
+  div.innerHTML = html;
+  box.appendChild(div);
+}
 async function loadCouncil(lat, lon, radiusM) {
   let widened = false;
   let out = await loadCouncilWithin(lat, lon, radiusM);
@@ -287,6 +324,10 @@ document.getElementById('f').addEventListener('submit', async (e) => {
   box.innerHTML = '';
   status.textContent = 'Searching…';
   try {
+    // Barnet street-level yellow-line data is keyed by street name
+    // alone, so look it up first: its card must show even when the
+    // place cannot be geocoded or mapped.
+    const waiting = await findBarnetWaiting(place);
     let lat, lon, centreLabel;
     const named = await findNamedBays(place);
     if (named.length) {
@@ -301,7 +342,16 @@ document.getElementById('f').addEventListener('submit', async (e) => {
     if (lat === undefined) {
       const geo = await (await fetch('https://nominatim.openstreetmap.org/search?' +
         new URLSearchParams({ q: place, format: 'jsonv2', limit: 1, countrycodes: 'gb' }))).json();
-      if (!geo.length) { status.textContent = 'Place not found — try adding "London".'; return; }
+      if (!geo.length) {
+        if (waiting) {
+          status.textContent = 'Barnet street data found for ' + waiting.name +
+            ' (the place itself could not be mapped).';
+          renderWaitingCard(box, waiting);
+        } else {
+          status.textContent = 'Place not found — try adding "London".';
+        }
+        return;
+      }
       lat = parseFloat(geo[0].lat); lon = parseFloat(geo[0].lon);
       centreLabel = geo[0].display_name.split(',').slice(0, 2).join(',');
     }
@@ -362,34 +412,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
           .bindPopup((b.road || 'Bay') + ' — ' + (b.restriction || '')));
       });
     }
-    const waiting = await findBarnetWaiting(place);
-    if (waiting) {
-      const head = document.createElement('div');
-      head.innerHTML = '<strong>Yellow lines on this street — Barnet Council data</strong>';
-      head.style.margin = '14px 0 4px';
-      box.appendChild(head);
-      const div = document.createElement('div');
-      div.className = 'card';
-      let html = '<strong>' + waiting.name + '</strong>' +
-        '<div class="meta">Barnet publishes waiting restrictions per street and side, with lengths but no exact positions — the totals below are the council\u2019s own. Same-name streets in different parts of Barnet are combined, as in the council\u2019s file. Always check the sign.</div>';
-      for (const s of waiting.sides) {
-        const label = (s.side === 'Both sides' || s.side === 'Side not stated')
-          ? s.side : s.side + ' side';
-        const parts = s.entries.map(e => {
-          const swatch = e.type === 'double'
-            ? '<span style="color:#f59e0b;font-weight:700">━━</span> Double yellow'
-            : '<span style="color:#eab308;font-weight:700">━━</span> Single yellow';
-          const hrs = e.type === 'double' ? 'no waiting at any time'
-            : (e.hours ? 'no waiting ' + e.hours
-                       : 'no waiting — hours not specified in the council\u2019s file');
-          return swatch + ' (' + hrs + '): ' + Math.round(e.metres) +
-            ' m in ' + e.segments + ' ' + segWord(e.segments);
-        });
-        html += '<div>' + label + ' — ' + parts.join(' · ') + '</div>';
-      }
-      div.innerHTML = html;
-      box.appendChild(div);
-    }
+    if (waiting) renderWaitingCard(box, waiting);
     if (!feats.length && !bays.length && !waiting)
       box.innerHTML = '<div class="card">No parking is mapped in open data within that radius. That means "not mapped", not "no parking exists".</div>';
   } catch (err) {
