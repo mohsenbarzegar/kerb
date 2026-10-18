@@ -55,14 +55,26 @@
 </form>
 <div id="status">Type a London place to search — answers come from a local snapshot of OpenStreetMap, so they're instant.</div>
 <div id="map"></div>
+<div id="linectl" style="margin:6px 0;font-size:.92rem">
+  <label><input type="checkbox" id="showlines"> Yellow lines overlay
+  <span class="meta">(City of London pilot — more boroughs to follow)</span></label>
+  <div id="linelegend" class="meta" style="display:none;margin-top:4px">
+    <span style="color:#f59e0b;font-weight:700">━━</span> double yellow — no waiting at any time ·
+    <span style="color:#eab308;font-weight:700">━━</span> single yellow — no waiting at the hours in its tooltip ·
+    <span style="color:#9ca3af;font-weight:700">┅┅</span> restriction published without hours — check the sign.
+    Tap a line for details.
+  </div>
+</div>
 <div id="results"></div>
 <footer>Open data is incomplete — coverage varies street by street and tariffs
 often aren't published openly. <strong>Always check the sign on the street; it
 is the legal truth.</strong> Data: © OpenStreetMap contributors (ODbL), via the
 Geofabrik Greater London extract. Bay and car park data with tariffs,
 times and how to pay: © Camden, Westminster, Brent and Ealing councils.
+Yellow-line (waiting restriction) data: © City of London Corporation,
+published as INSPIRE open data.
 D-TRO (DfT) data joins the same engine once our data-consumer account is
-approved. Demo build v0.37.0.</footer>
+approved. Demo build v0.38.0.</footer>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="engine.js"></script>
 <script>
@@ -168,6 +180,74 @@ function ensureMap(lat, lon) {
   } else { map.setView([lat, lon], 15); }
   markers.forEach(m => m.remove()); markers = [];
 }
+// ---- Yellow-lines overlay (waiting restrictions) ----
+let lineManifest = null, lineLayer = null, lineHooked = false;
+const lineCache = {};
+const LINE_STYLES = {
+  double:   { color: '#f59e0b', weight: 6, opacity: 0.95 },
+  single:   { color: '#facc15', weight: 3.5, opacity: 0.95 },
+  unstated: { color: '#9ca3af', weight: 3, opacity: 0.9, dashArray: '6 5' }
+};
+function lineTooltip(l) {
+  const street = l.street || 'City of London';
+  let head, body;
+  if (l.type === 'double') {
+    head = 'Double yellow lines'; body = 'No waiting at any time.';
+  } else if (l.type === 'single') {
+    head = 'Single yellow line';
+    body = 'No waiting: ' + l.hours + ' — the City\u2019s controlled hours.';
+  } else {
+    head = 'Waiting restriction';
+    body = 'Hours not stated in the City\u2019s published data — check the sign on the street.';
+  }
+  return '<strong>' + head + '</strong><br>' + street + '<br>' + body +
+    '<br><span class="meta">City of London · Order ' + (l.tmo || '2021/18') +
+    ' · Always check the sign — it is the legal truth.</span>';
+}
+async function drawLines() {
+  if (!map) return;
+  try {
+    if (!lineManifest)
+      lineManifest = await (await fetch('data-lines/manifest.json')).json();
+  } catch (e) { return; }
+  const have = new Set(lineManifest.tiles);
+  const b = map.getBounds();
+  const names = new Set();
+  for (let la = b.getSouth(); la <= b.getNorth(); la += CELL.lat / 2)
+    for (let lo = b.getWest(); lo <= b.getEast(); lo += CELL.lon / 2)
+      names.add(tileName(la, lo));
+  if (!lineLayer) lineLayer = L.layerGroup().addTo(map);
+  lineLayer.clearLayers();
+  const drawn = new Set();
+  for (const name of names) {
+    if (!have.has(name)) continue;
+    if (!lineCache[name]) {
+      try { lineCache[name] = (await (await fetch('data-lines/' + name)).json()).lines; }
+      catch (e) { lineCache[name] = []; }
+    }
+    for (const l of lineCache[name]) {
+      if (drawn.has(l.id)) continue;
+      drawn.add(l.id);
+      for (const path of l.paths)
+        L.polyline(path, LINE_STYLES[l.type] || LINE_STYLES.unstated)
+          .bindTooltip(lineTooltip(l), { sticky: true }).addTo(lineLayer);
+    }
+  }
+}
+document.getElementById('showlines').addEventListener('change', async (e) => {
+  document.getElementById('linelegend').style.display =
+    e.target.checked ? 'block' : 'none';
+  if (e.target.checked) {
+    if (!map) ensureMap(51.5155, -0.0922);  // City of London centre
+    if (!lineHooked) {
+      lineHooked = true;
+      map.on('moveend', () => {
+        if (document.getElementById('showlines').checked) drawLines();
+      });
+    }
+    await drawLines();
+  } else if (lineLayer) { lineLayer.clearLayers(); }
+});
 function durationWarning(f, durationMin) {
   if (!durationMin) return null;
   for (const s of f.sides || []) {
